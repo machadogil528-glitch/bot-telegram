@@ -13,6 +13,7 @@ async def clicar(update, context):
         await query.edit_message_text("❌ LOSS registrado")
 
 async def start(update, context):
+    async def resultado(update, context):
     keyboard = [
         [
             InlineKeyboardButton("✅ WIN", callback_data="win"),
