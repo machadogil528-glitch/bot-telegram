@@ -30,6 +30,7 @@ async def start(update, context):
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("resultado", resultado ))
 app.add_handler(CallbackQueryHandler(clicar))
 
 app.run_polling()
