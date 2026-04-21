@@ -20,16 +20,20 @@ def iniciar_banco():
     c.execute("""
     CREATE TABLE IF NOT EXISTS resultados (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        mercado TEXT NOT NULL,
         resultado TEXT NOT NULL
     )
     """)
     conn.commit()
     conn.close()
 
-def salvar_resultado(resultado):
+def salvar_resultado(mercado, resultado):
     conn = sqlite3.connect("database.db")
     c = conn.cursor()
-    c.execute("INSERT INTO resultados (resultado) VALUES (?)", (resultado,))
+    c.execute(
+        "INSERT INTO resultados (mercado, resultado) VALUES (?, ?)",
+        (mercado, resultado)
+    )
     conn.commit()
     conn.close()
 
@@ -37,21 +41,60 @@ def contar_resultados():
     conn = sqlite3.connect("database.db")
     c = conn.cursor()
 
-    c.execute("SELECT COUNT(*) FROM resultados WHERE resultado='WIN'")
-    wins = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM resultados WHERE resultado='GREEN'")
+    greens = c.fetchone()[0]
 
-    c.execute("SELECT COUNT(*) FROM resultados WHERE resultado='LOSS'")
-    losses = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM resultados WHERE resultado='RED'")
+    reds = c.fetchone()[0]
 
-    lucro = (wins * 10) - (losses * 10)
+    c.execute("SELECT COUNT(*) FROM resultados WHERE resultado='REEMBOLSO'")
+    reembolsos = c.fetchone()[0]
+
+    lucro = (greens * 10) - (reds * 10)
 
     conn.close()
-    return wins, losses, lucro
+    return greens, reds, reembolsos, lucro
 
-def botoes():
+def resumo_por_mercado():
+    conn = sqlite3.connect("database.db")
+    c = conn.cursor()
+
+    mercados = ["ESCANTEIO_HT", "GOL_HT", "GOL_FT", "AMBAS_MARCAM"]
+    resumo = {}
+
+    for mercado in mercados:
+        c.execute(
+            "SELECT COUNT(*) FROM resultados WHERE mercado=? AND resultado='GREEN'",
+            (mercado,)
+        )
+        greens = c.fetchone()[0]
+
+        c.execute(
+            "SELECT COUNT(*) FROM resultados WHERE mercado=? AND resultado='RED'",
+            (mercado,)
+        )
+        reds = c.fetchone()[0]
+
+        c.execute(
+            "SELECT COUNT(*) FROM resultados WHERE mercado=? AND resultado='REEMBOLSO'",
+            (mercado,)
+        )
+        reembolsos = c.fetchone()[0]
+
+        resumo[mercado] = {
+            "greens": greens,
+            "reds": reds,
+            "reembolsos": reembolsos
+        }
+
+    conn.close()
+    return resumo
+
+def botoes_resultado(mercado):
     keyboard = [[
-        InlineKeyboardButton("✅ WIN", callback_data="win"),
-        InlineKeyboardButton("❌ LOSS", callback_data="loss")
+        InlineKeyboardButton("✅ Green", callback_data=f"GREEN|{mercado}"),
+        InlineKeyboardButton("❌ Red", callback_data=f"RED|{mercado}"),
+        InlineKeyboardButton("💸 Reembolso", callback_data=f"REEMBOLSO|{mercado}")
     ]]
     return InlineKeyboardMarkup(keyboard)
 
@@ -80,11 +123,8 @@ def pegar_stat(stats, nome):
             return valor
     return 0
 
-def analisar_jogo(fixture, stats_resp):
+def classificar_mercado(fixture, stats_resp):
     minuto = fixture["fixture"]["status"].get("elapsed") or 0
-    if minuto < 20:
-        return None
-
     if len(stats_resp) < 2:
         return None
 
@@ -111,20 +151,80 @@ def analisar_jogo(fixture, stats_resp):
     total_shots = home_shots_total + away_shots_total
     posse_max = max(home_posse, away_posse)
 
+    home_forca = home_shots_total + home_shots_on + home_corners
+    away_forca = away_shots_total + away_shots_on + away_corners
+
+    # ESCANTEIO HT
     if (
-        minuto >= 20 and
-        (
-            total_shots_on >= 2 or
-            total_shots >= 8 or
-            total_corners >= 4 or
-            posse_max >= 60
-        )
+        35 <= minuto <= 45 and
+        total_corners >= 4 and
+        posse_max >= 55 and
+        total_shots >= 8
     ):
         return {
-            "fixture_id": fixture["fixture"]["id"],
-            "jogo": f'{fixture["teams"]["home"]["name"]} x {fixture["teams"]["away"]["name"]}',
-            "placar": f"{gols_home}-{gols_away}",
+            "mercado": "ESCANTEIO_HT",
+            "emoji": "🚩",
+            "titulo": "ESCANTEIO HT",
             "minuto": minuto,
+            "placar": f"{gols_home}-{gols_away}",
+            "corners": total_corners,
+            "shots_on": total_shots_on,
+            "shots_total": total_shots,
+            "posse_max": posse_max
+        }
+
+    # GOL HT
+    if (
+        30 <= minuto <= 45 and
+        total_shots_on >= 3 and
+        total_shots >= 10 and
+        posse_max >= 55
+    ):
+        return {
+            "mercado": "GOL_HT",
+            "emoji": "⚽",
+            "titulo": "GOL HT",
+            "minuto": minuto,
+            "placar": f"{gols_home}-{gols_away}",
+            "corners": total_corners,
+            "shots_on": total_shots_on,
+            "shots_total": total_shots,
+            "posse_max": posse_max
+        }
+
+    # GOL FT
+    if (
+        minuto >= 60 and
+        total_shots_on >= 4 and
+        total_shots >= 12 and
+        posse_max >= 55
+    ):
+        return {
+            "mercado": "GOL_FT",
+            "emoji": "🥅",
+            "titulo": "GOL FT",
+            "minuto": minuto,
+            "placar": f"{gols_home}-{gols_away}",
+            "corners": total_corners,
+            "shots_on": total_shots_on,
+            "shots_total": total_shots,
+            "posse_max": posse_max
+        }
+
+    # AMBAS MARCAM
+    if (
+        minuto >= 50 and
+        home_shots_total >= 5 and
+        away_shots_total >= 5 and
+        home_shots_on >= 1 and
+        away_shots_on >= 1
+    ):
+        return {
+            "mercado": "AMBAS_MARCAM",
+            "emoji": "🤝",
+            "titulo": "AMBAS MARCAM",
+            "minuto": minuto,
+            "placar": f"{gols_home}-{gols_away}",
             "corners": total_corners,
             "shots_on": total_shots_on,
             "shots_total": total_shots,
@@ -137,12 +237,25 @@ async def clicar(update, context):
     query = update.callback_query
     await query.answer()
 
-    if "win" in query.data:
-        salvar_resultado("WIN")
-        await query.edit_message_text("✅ WIN registrado")
-    else:
-        salvar_resultado("LOSS")
-        await query.edit_message_text("❌ LOSS registrado")
+    try:
+        resultado, mercado = query.data.split("|")
+    except ValueError:
+        await query.edit_message_text("Erro ao registrar resultado.")
+        return
+
+    salvar_resultado(mercado, resultado)
+
+    nomes = {
+        "GREEN": "✅ Green",
+        "RED": "❌ Red",
+        "REEMBOLSO": "💸 Reembolso"
+    }
+
+    mercado_bonito = mercado.replace("_", " ")
+
+    await query.edit_message_text(
+        f"{nomes[resultado]} registrado\nMercado: {mercado_bonito}"
+    )
 
 async def start(update, context):
     await update.message.reply_text("Bot online ✅")
@@ -150,14 +263,27 @@ async def start(update, context):
 async def alerta(update, context):
     await update.message.reply_text(
         "🚨 ALERTA MANUAL\nEntrada ao vivo",
-        reply_markup=botoes()
+        reply_markup=botoes_resultado("ESCANTEIO_HT")
     )
 
 async def resultado(update, context):
-    wins, losses, lucro = contar_resultados()
-    await update.message.reply_text(
-        f"📊 RESULTADOS\n\n✅ WIN: {wins}\n❌ LOSS: {losses}\n\n💰 Lucro: {lucro}"
+    greens, reds, reembolsos, lucro = contar_resultados()
+    resumo = resumo_por_mercado()
+
+    texto = (
+        f"📊 RESULTADOS GERAIS\n\n"
+        f"✅ Green: {greens}\n"
+        f"❌ Red: {reds}\n"
+        f"💸 Reembolso: {reembolsos}\n\n"
+        f"💰 Lucro: {lucro}\n\n"
+        f"📌 POR MERCADO\n"
+        f"🚩 Escanteio HT: G {resumo['ESCANTEIO_HT']['greens']} | R {resumo['ESCANTEIO_HT']['reds']} | Re {resumo['ESCANTEIO_HT']['reembolsos']}\n"
+        f"⚽ Gol HT: G {resumo['GOL_HT']['greens']} | R {resumo['GOL_HT']['reds']} | Re {resumo['GOL_HT']['reembolsos']}\n"
+        f"🥅 Gol FT: G {resumo['GOL_FT']['greens']} | R {resumo['GOL_FT']['reds']} | Re {resumo['GOL_FT']['reembolsos']}\n"
+        f"🤝 Ambas marcam: G {resumo['AMBAS_MARCAM']['greens']} | R {resumo['AMBAS_MARCAM']['reds']} | Re {resumo['AMBAS_MARCAM']['reembolsos']}"
     )
+
+    await update.message.reply_text(texto)
 
 async def aovivo(update, context):
     try:
@@ -172,12 +298,13 @@ async def aovivo(update, context):
         for fixture in jogos[:10]:
             fixture_id = fixture["fixture"]["id"]
             stats = estatisticas_fixture(fixture_id)
-            sinal = analisar_jogo(fixture, stats)
+            sinal = classificar_mercado(fixture, stats)
 
             if sinal:
+                jogo = f'{fixture["teams"]["home"]["name"]} x {fixture["teams"]["away"]["name"]}'
                 texto = (
-                    f"🚨 ALERTA AO VIVO\n"
-                    f"🏟 {sinal['jogo']}\n"
+                    f"{sinal['emoji']} ALERTA {sinal['titulo']}\n"
+                    f"🏟 {jogo}\n"
                     f"⏱ {sinal['minuto']}'\n"
                     f"⚽ {sinal['placar']}\n"
                     f"📊 Posse máx: {sinal['posse_max']}%\n"
@@ -185,7 +312,10 @@ async def aovivo(update, context):
                     f"🥅 Chutes totais: {sinal['shots_total']}\n"
                     f"🚩 Escanteios: {sinal['corners']}"
                 )
-                await update.message.reply_text(texto, reply_markup=botoes())
+                await update.message.reply_text(
+                    texto,
+                    reply_markup=botoes_resultado(sinal["mercado"])
+                )
                 enviados += 1
 
         if enviados == 0:
@@ -209,12 +339,13 @@ async def verificar_automatico(context):
                 continue
 
             stats = estatisticas_fixture(fixture_id)
-            sinal = analisar_jogo(fixture, stats)
+            sinal = classificar_mercado(fixture, stats)
 
             if sinal:
+                jogo = f'{fixture["teams"]["home"]["name"]} x {fixture["teams"]["away"]["name"]}'
                 texto = (
-                    f"🚨 ALERTA AUTOMÁTICO\n"
-                    f"🏟 {sinal['jogo']}\n"
+                    f"{sinal['emoji']} ALERTA {sinal['titulo']}\n"
+                    f"🏟 {jogo}\n"
                     f"⏱ {sinal['minuto']}'\n"
                     f"⚽ {sinal['placar']}\n"
                     f"📊 Posse máx: {sinal['posse_max']}%\n"
@@ -226,7 +357,7 @@ async def verificar_automatico(context):
                 await context.bot.send_message(
                     chat_id=CHAT_ID,
                     text=texto,
-                    reply_markup=botoes()
+                    reply_markup=botoes_resultado(sinal["mercado"])
                 )
 
                 alertas_enviados.add(fixture_id)
