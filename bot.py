@@ -4,8 +4,8 @@ import os
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler
 
-TOKEN = os.getenv("8605323770:AAGTooVrn6aq3CfXMtCa40LpTxDCPt7MzxI")
-API_KEY = os.getenv("152c157e245bb28011b27e7a8e80aad0")
+TOKEN = os.getenv("TOKEN")
+API_KEY = os.getenv("API_KEY")
 CHAT_ID = int(os.getenv("CHAT_ID", "5866187111"))
 
 HEADERS = {
