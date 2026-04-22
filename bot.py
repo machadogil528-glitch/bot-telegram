@@ -192,13 +192,13 @@ def classificar_mercado(fixture, stats_resp):
             "posse_max": posse_max
         }
 
-# GOL FT
-if (
-    60 <= minuto <= 70 and
-    total_shots_on >= 5 and
-    total_shots >= 12 and
-    posse_max >= 55
-):
+    # GOL FT
+    if (
+        60 <= minuto <= 70 and
+        total_shots_on >= 5 and
+        total_shots >= 12 and
+        posse_max >= 55
+    ):
         return {
             "mercado": "GOL_FT",
             "emoji": "🥅",
@@ -210,7 +210,7 @@ if (
             "shots_total": total_shots,
             "posse_max": posse_max
         }
-
+        
     # AMBAS MARCAM
     if (
         minuto >= 50 and
