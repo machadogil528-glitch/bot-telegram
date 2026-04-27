@@ -194,9 +194,9 @@ def classificar_mercado(fixture, stats_resp):
 
     # GOL FT
     if (
-        60 <= minuto <= 70 and
-        total_shots_on >= 5 and
-        total_shots >= 12 and
+        60 <= minuto <= 75 and
+        total_shots_on >= 4 and
+        total_shots >= 10 and
         posse_max >= 55
     ):
         return {
