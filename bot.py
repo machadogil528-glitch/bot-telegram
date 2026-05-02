@@ -156,11 +156,11 @@ def classificar_mercado(fixture, stats_resp):
 
     # ESCANTEIO HT
     if (
-        35 <= minuto <= 45 and
-        total_corners >= 4 and
-        posse_max >= 55 and
-        total_shots >= 8
-    ):
+    35 <= minuto <= 45 and
+    total_corners >= 3 and
+    posse_max >= 52 and
+    total_shots >= 6
+):
         return {
             "mercado": "ESCANTEIO_HT",
             "emoji": "🚩",
@@ -174,12 +174,12 @@ def classificar_mercado(fixture, stats_resp):
         }
 
     # GOL HT
-    if (
-        30 <= minuto <= 45 and
-        total_shots_on >= 3 and
-        total_shots >= 10 and
-        posse_max >= 55
-    ):
+  if (
+    30 <= minuto <= 45 and
+    total_shots_on >= 2 and
+    total_shots >= 8 and
+    posse_max >= 55
+):
         return {
             "mercado": "GOL_HT",
             "emoji": "⚽",
@@ -194,11 +194,11 @@ def classificar_mercado(fixture, stats_resp):
 
     # GOL FT
     if (
-        60 <= minuto <= 75 and
-        total_shots_on >= 4 and
-        total_shots >= 10 and
-        posse_max >= 55
-    ):
+    60 <= minuto <= 78 and
+    total_shots_on >= 3 and
+    total_shots >= 9 and
+    posse_max >= 55
+):
         return {
             "mercado": "GOL_FT",
             "emoji": "🥅",
@@ -213,12 +213,12 @@ def classificar_mercado(fixture, stats_resp):
         
     # AMBAS MARCAM
     if (
-        minuto >= 50 and
-        home_shots_total >= 5 and
-        away_shots_total >= 5 and
-        home_shots_on >= 1 and
-        away_shots_on >= 1
-    ):
+    55 <= minuto <= 80 and
+    home_shots_total >= 4 and
+    away_shots_total >= 4 and
+    home_shots_on >= 1 and
+    away_shots_on >= 1
+):
         return {
             "mercado": "AMBAS_MARCAM",
             "emoji": "🤝",
