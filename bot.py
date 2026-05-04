@@ -63,22 +63,13 @@ def resumo_por_mercado():
     resumo = {}
 
     for mercado in mercados:
-        c.execute(
-            "SELECT COUNT(*) FROM resultados WHERE mercado=? AND resultado='GREEN'",
-            (mercado,)
-        )
+        c.execute("SELECT COUNT(*) FROM resultados WHERE mercado=? AND resultado='GREEN'", (mercado,))
         greens = c.fetchone()[0]
 
-        c.execute(
-            "SELECT COUNT(*) FROM resultados WHERE mercado=? AND resultado='RED'",
-            (mercado,)
-        )
+        c.execute("SELECT COUNT(*) FROM resultados WHERE mercado=? AND resultado='RED'", (mercado,))
         reds = c.fetchone()[0]
 
-        c.execute(
-            "SELECT COUNT(*) FROM resultados WHERE mercado=? AND resultado='REEMBOLSO'",
-            (mercado,)
-        )
+        c.execute("SELECT COUNT(*) FROM resultados WHERE mercado=? AND resultado='REEMBOLSO'", (mercado,))
         reembolsos = c.fetchone()[0]
 
         resumo[mercado] = {
@@ -125,6 +116,7 @@ def pegar_stat(stats, nome):
 
 def classificar_mercado(fixture, stats_resp):
     minuto = fixture["fixture"]["status"].get("elapsed") or 0
+
     if len(stats_resp) < 2:
         return None
 
@@ -151,15 +143,12 @@ def classificar_mercado(fixture, stats_resp):
     total_shots = home_shots_total + away_shots_total
     posse_max = max(home_posse, away_posse)
 
-    home_forca = home_shots_total + home_shots_on + home_corners
-    away_forca = away_shots_total + away_shots_on + away_corners
-
-        # ESCANTEIO HT
+    # ESCANTEIO HT
     if (
         35 <= minuto <= 45 and
         total_corners >= 3 and
-        posse_max >= 52 and
-        total_shots >= 6
+        posse_max >= 50 and
+        total_shots >= 5
     ):
         return {
             "mercado": "ESCANTEIO_HT",
@@ -177,8 +166,8 @@ def classificar_mercado(fixture, stats_resp):
     if (
         30 <= minuto <= 45 and
         total_shots_on >= 2 and
-        total_shots >= 8 and
-        posse_max >= 55
+        total_shots >= 7 and
+        posse_max >= 50
     ):
         return {
             "mercado": "GOL_HT",
@@ -195,9 +184,9 @@ def classificar_mercado(fixture, stats_resp):
     # GOL FT
     if (
         60 <= minuto <= 78 and
-        total_shots_on >= 3 and
-        total_shots >= 9 and
-        posse_max >= 55
+        total_shots_on >= 2 and
+        total_shots >= 8 and
+        posse_max >= 50
     ):
         return {
             "mercado": "GOL_FT",
@@ -329,6 +318,7 @@ async def verificar_automatico(context):
 
     try:
         jogos = jogos_ao_vivo()
+
         if not jogos:
             return
 
