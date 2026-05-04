@@ -6,7 +6,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ================= CONFIGURAÇÕES =================
-TOKEN = os.getenv("TOKEN")
+TELEGRAM_TOKEN = "8605323770:AAGTooVrn6aq3CfXMtCa40LpTxDCPt7MzxI"
 API_KEY = os.getenv("API_KEY")
 CHAT_ID = int(os.getenv("CHAT_ID", "5866187111"))
 
