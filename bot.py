@@ -1,370 +1,394 @@
+import logging
 import sqlite3
 import requests
-import os
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler
+from datetime import datetime
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
+# ================= CONFIGURAÇÕES =================
 TOKEN = os.getenv("TOKEN")
 API_KEY = os.getenv("API_KEY")
 CHAT_ID = int(os.getenv("CHAT_ID", "5866187111"))
 
-HEADERS = {
-    "x-apisports-key": API_KEY
-}
+API_URL = "https://v3.football.api-sports.io/fixtures?live=all"
 
-alertas_enviados = set()
+INTERVALO_BUSCA = 60  # segundos
 
-def iniciar_banco():
-    conn = sqlite3.connect("database.db")
-    c = conn.cursor()
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS resultados (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        mercado TEXT NOT NULL,
-        resultado TEXT NOT NULL
+# ================= LOG =================
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+
+# ================= BANCO DE DADOS =================
+
+conn = sqlite3.connect("resultados.db", check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS resultados (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    resultado TEXT,
+    data TEXT
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS sinais_enviados (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fixture_id INTEGER UNIQUE,
+    tipo TEXT,
+    data TEXT
+)
+""")
+
+conn.commit()
+
+# ================= COMANDOS =================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ Bot iniciado! Monitorando sinais de Gol HT.")
+
+async def resultado(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cursor.execute("SELECT resultado, COUNT(*) FROM resultados GROUP BY resultado")
+    dados = cursor.fetchall()
+
+    win = 0
+    loss = 0
+    reembolso = 0
+
+    for resultado, total in dados:
+        if resultado == "WIN":
+            win = total
+        elif resultado == "LOSS":
+            loss = total
+        elif resultado == "REEMBOLSO":
+            reembolso = total
+
+    lucro = (win * 10) - (loss * 10)
+
+    texto = f"""
+📊 RESULTADOS
+
+✅ WIN: {win}
+❌ LOSS: {loss}
+🔁 REEMBOLSO: {reembolso}
+
+💰 Lucro estimado: {lucro}
+"""
+
+    await update.message.reply_text(texto)
+
+# ================= BOTÕES =================
+
+async def botoes_resultado(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    resultado = query.data
+    data = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+    cursor.execute(
+        "INSERT INTO resultados (resultado, data) VALUES (?, ?)",
+        (resultado, data)
     )
-    """)
     conn.commit()
-    conn.close()
 
-def salvar_resultado(mercado, resultado):
-    conn = sqlite3.connect("database.db")
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO resultados (mercado, resultado) VALUES (?, ?)",
-        (mercado, resultado)
-    )
-    conn.commit()
-    conn.close()
+    await query.edit_message_text(f"Resultado marcado: {resultado}")
 
-def contar_resultados():
-    conn = sqlite3.connect("database.db")
-    c = conn.cursor()
+# ================= DETECTOR INTELIGENTE GOL HT =================
 
-    c.execute("SELECT COUNT(*) FROM resultados WHERE resultado='GREEN'")
-    greens = c.fetchone()[0]
+def detector_gol_ht(dados):
+    score = 0
+    motivos = []
 
-    c.execute("SELECT COUNT(*) FROM resultados WHERE resultado='RED'")
-    reds = c.fetchone()[0]
+    minuto = dados.get("minuto", 0)
+    pressao = dados.get("pressao", 0)
+    ataques_perigosos = dados.get("ataques_perigosos", 0)
+    finalizacoes = dados.get("finalizacoes", 0)
+    chutes_gol = dados.get("chutes_gol", 0)
+    escanteios = dados.get("escanteios", 0)
 
-    c.execute("SELECT COUNT(*) FROM resultados WHERE resultado='REEMBOLSO'")
-    reembolsos = c.fetchone()[0]
-
-    lucro = (greens * 10) - (reds * 10)
-
-    conn.close()
-    return greens, reds, reembolsos, lucro
-
-def resumo_por_mercado():
-    conn = sqlite3.connect("database.db")
-    c = conn.cursor()
-
-    mercados = ["ESCANTEIO_HT", "GOL_HT", "GOL_FT", "AMBAS_MARCAM"]
-    resumo = {}
-
-    for mercado in mercados:
-        c.execute("SELECT COUNT(*) FROM resultados WHERE mercado=? AND resultado='GREEN'", (mercado,))
-        greens = c.fetchone()[0]
-
-        c.execute("SELECT COUNT(*) FROM resultados WHERE mercado=? AND resultado='RED'", (mercado,))
-        reds = c.fetchone()[0]
-
-        c.execute("SELECT COUNT(*) FROM resultados WHERE mercado=? AND resultado='REEMBOLSO'", (mercado,))
-        reembolsos = c.fetchone()[0]
-
-        resumo[mercado] = {
-            "greens": greens,
-            "reds": reds,
-            "reembolsos": reembolsos
-        }
-
-    conn.close()
-    return resumo
-
-def botoes_resultado(mercado):
-    keyboard = [[
-        InlineKeyboardButton("✅ Green", callback_data=f"GREEN|{mercado}"),
-        InlineKeyboardButton("❌ Red", callback_data=f"RED|{mercado}"),
-        InlineKeyboardButton("💸 Reembolso", callback_data=f"REEMBOLSO|{mercado}")
-    ]]
-    return InlineKeyboardMarkup(keyboard)
-
-def jogos_ao_vivo():
-    url = "https://v3.football.api-sports.io/fixtures?live=all"
-    r = requests.get(url, headers=HEADERS, timeout=20)
-    r.raise_for_status()
-    data = r.json()
-    return data.get("response", [])
-
-def estatisticas_fixture(fixture_id):
-    url = f"https://v3.football.api-sports.io/fixtures/statistics?fixture={fixture_id}"
-    r = requests.get(url, headers=HEADERS, timeout=20)
-    r.raise_for_status()
-    data = r.json()
-    return data.get("response", [])
-
-def pegar_stat(stats, nome):
-    for item in stats:
-        if item.get("type") == nome:
-            valor = item.get("value")
-            if valor is None:
-                return 0
-            if isinstance(valor, str) and valor.endswith("%"):
-                return int(valor.replace("%", ""))
-            return valor
-    return 0
-
-def classificar_mercado(fixture, stats_resp):
-    minuto = fixture["fixture"]["status"].get("elapsed") or 0
-
-    if len(stats_resp) < 2:
+    # Evita ruído muito inicial
+    if minuto < 3:
         return None
 
-    home = stats_resp[0]["statistics"]
-    away = stats_resp[1]["statistics"]
+    # Só primeiro tempo
+    if minuto > 45:
+        return None
 
-    home_posse = pegar_stat(home, "Ball Possession")
-    away_posse = pegar_stat(away, "Ball Possession")
+    # Pressão
+    if pressao >= 60:
+        score += 20
+        motivos.append("pressão alta")
 
-    home_corners = pegar_stat(home, "Corner Kicks")
-    away_corners = pegar_stat(away, "Corner Kicks")
+    if pressao >= 70:
+        score += 10
+        motivos.append("pressão muito forte")
 
-    home_shots_on = pegar_stat(home, "Shots on Goal")
-    away_shots_on = pegar_stat(away, "Shots on Goal")
+    # Ataques perigosos
+    if ataques_perigosos >= 20:
+        score += 20
+        motivos.append("muitos ataques perigosos")
 
-    home_shots_total = pegar_stat(home, "Total Shots")
-    away_shots_total = pegar_stat(away, "Total Shots")
+    if ataques_perigosos >= 35:
+        score += 15
+        motivos.append("ataques perigosos muito altos")
 
-    gols_home = fixture["goals"]["home"] or 0
-    gols_away = fixture["goals"]["away"] or 0
+    # Finalizações
+    if finalizacoes >= 4:
+        score += 15
+        motivos.append("bom volume de finalizações")
 
-    total_corners = home_corners + away_corners
-    total_shots_on = home_shots_on + away_shots_on
-    total_shots = home_shots_total + away_shots_total
-    posse_max = max(home_posse, away_posse)
+    if finalizacoes >= 7:
+        score += 15
+        motivos.append("volume ofensivo muito forte")
 
-    # ESCANTEIO HT
-    if (
-        35 <= minuto <= 45 and
-        total_corners >= 3 and
-        posse_max >= 50 and
-        total_shots >= 5
-    ):
+    # Chutes no gol
+    if chutes_gol >= 2:
+        score += 15
+        motivos.append("chutes no gol")
+
+    if chutes_gol >= 4:
+        score += 15
+        motivos.append("muitos chutes no gol")
+
+    # Escanteios
+    if escanteios >= 3:
+        score += 10
+        motivos.append("sequência de escanteios")
+
+    if escanteios >= 5:
+        score += 10
+        motivos.append("muitos escanteios")
+
+    # Detector de explosão cedo
+    if minuto <= 15 and (finalizacoes >= 4 or chutes_gol >= 2 or escanteios >= 3):
+        score += 20
+        motivos.append("padrão forte apareceu cedo")
+
+    if score >= 70:
         return {
-            "mercado": "ESCANTEIO_HT",
-            "emoji": "🚩",
-            "titulo": "ESCANTEIO HT",
-            "minuto": minuto,
-            "placar": f"{gols_home}-{gols_away}",
-            "corners": total_corners,
-            "shots_on": total_shots_on,
-            "shots_total": total_shots,
-            "posse_max": posse_max
+            "tipo": "🔥 GOL HT - SINAL FORTE",
+            "score": score,
+            "motivos": motivos
         }
 
-    # GOL HT
-    if (
-        30 <= minuto <= 45 and
-        total_shots_on >= 2 and
-        total_shots >= 7 and
-        posse_max >= 50
-    ):
+    if score >= 50:
         return {
-            "mercado": "GOL_HT",
-            "emoji": "⚽",
-            "titulo": "GOL HT",
-            "minuto": minuto,
-            "placar": f"{gols_home}-{gols_away}",
-            "corners": total_corners,
-            "shots_on": total_shots_on,
-            "shots_total": total_shots,
-            "posse_max": posse_max
-        }
-
-    # GOL FT
-    if (
-        60 <= minuto <= 78 and
-        total_shots_on >= 2 and
-        total_shots >= 8 and
-        posse_max >= 50
-    ):
-        return {
-            "mercado": "GOL_FT",
-            "emoji": "🥅",
-            "titulo": "GOL FT",
-            "minuto": minuto,
-            "placar": f"{gols_home}-{gols_away}",
-            "corners": total_corners,
-            "shots_on": total_shots_on,
-            "shots_total": total_shots,
-            "posse_max": posse_max
-        }
-
-    # AMBAS MARCAM
-    if (
-        55 <= minuto <= 80 and
-        home_shots_total >= 4 and
-        away_shots_total >= 4 and
-        home_shots_on >= 1 and
-        away_shots_on >= 1
-    ):
-        return {
-            "mercado": "AMBAS_MARCAM",
-            "emoji": "🤝",
-            "titulo": "AMBAS MARCAM",
-            "minuto": minuto,
-            "placar": f"{gols_home}-{gols_away}",
-            "corners": total_corners,
-            "shots_on": total_shots_on,
-            "shots_total": total_shots,
-            "posse_max": posse_max
+            "tipo": "⚠️ GOL HT - SINAL MÉDIO",
+            "score": score,
+            "motivos": motivos
         }
 
     return None
 
-async def clicar(update, context):
-    query = update.callback_query
-    await query.answer()
+# ================= API FOOTBALL =================
 
-    try:
-        resultado, mercado = query.data.split("|")
-    except ValueError:
-        await query.edit_message_text("Erro ao registrar resultado.")
-        return
-
-    salvar_resultado(mercado, resultado)
-
-    nomes = {
-        "GREEN": "✅ Green",
-        "RED": "❌ Red",
-        "REEMBOLSO": "💸 Reembolso"
+def buscar_jogos_ao_vivo():
+    headers = {
+        "x-apisports-key": API_FOOTBALL_KEY
     }
 
-    mercado_bonito = mercado.replace("_", " ")
-
-    await query.edit_message_text(
-        f"{nomes[resultado]} registrado\nMercado: {mercado_bonito}"
-    )
-
-async def start(update, context):
-    await update.message.reply_text("Bot online ✅")
-
-async def alerta(update, context):
-    await update.message.reply_text(
-        "🚨 ALERTA MANUAL\nEntrada ao vivo",
-        reply_markup=botoes_resultado("ESCANTEIO_HT")
-    )
-
-async def resultado(update, context):
-    greens, reds, reembolsos, lucro = contar_resultados()
-    resumo = resumo_por_mercado()
-
-    texto = (
-        f"📊 RESULTADOS GERAIS\n\n"
-        f"✅ Green: {greens}\n"
-        f"❌ Red: {reds}\n"
-        f"💸 Reembolso: {reembolsos}\n\n"
-        f"💰 Lucro: {lucro}\n\n"
-        f"📌 POR MERCADO\n"
-        f"🚩 Escanteio HT: G {resumo['ESCANTEIO_HT']['greens']} | R {resumo['ESCANTEIO_HT']['reds']} | Re {resumo['ESCANTEIO_HT']['reembolsos']}\n"
-        f"⚽ Gol HT: G {resumo['GOL_HT']['greens']} | R {resumo['GOL_HT']['reds']} | Re {resumo['GOL_HT']['reembolsos']}\n"
-        f"🥅 Gol FT: G {resumo['GOL_FT']['greens']} | R {resumo['GOL_FT']['reds']} | Re {resumo['GOL_FT']['reembolsos']}\n"
-        f"🤝 Ambas marcam: G {resumo['AMBAS_MARCAM']['greens']} | R {resumo['AMBAS_MARCAM']['reds']} | Re {resumo['AMBAS_MARCAM']['reembolsos']}"
-    )
-
-    await update.message.reply_text(texto)
-
-async def aovivo(update, context):
     try:
-        jogos = jogos_ao_vivo()
+        resposta = requests.get(API_URL, headers=headers, timeout=20)
 
-        if not jogos:
-            await update.message.reply_text("Nenhum jogo ao vivo agora.")
-            return
+        if resposta.status_code != 200:
+            logging.error(f"Erro API: {resposta.status_code} - {resposta.text}")
+            return []
 
-        enviados = 0
+        dados = resposta.json()
+        return dados.get("response", [])
 
-        for fixture in jogos[:10]:
-            fixture_id = fixture["fixture"]["id"]
-            stats = estatisticas_fixture(fixture_id)
-            sinal = classificar_mercado(fixture, stats)
+    except Exception as erro:
+        logging.error(f"Erro ao buscar jogos: {erro}")
+        return []
 
-            if sinal:
-                jogo = f'{fixture["teams"]["home"]["name"]} x {fixture["teams"]["away"]["name"]}'
-                texto = (
-                    f"{sinal['emoji']} ALERTA {sinal['titulo']}\n"
-                    f"🏟 {jogo}\n"
-                    f"⏱ {sinal['minuto']}'\n"
-                    f"⚽ {sinal['placar']}\n"
-                    f"📊 Posse máx: {sinal['posse_max']}%\n"
-                    f"🎯 Chutes no gol: {sinal['shots_on']}\n"
-                    f"🥅 Chutes totais: {sinal['shots_total']}\n"
-                    f"🚩 Escanteios: {sinal['corners']}"
-                )
-                await update.message.reply_text(
-                    texto,
-                    reply_markup=botoes_resultado(sinal["mercado"])
-                )
-                enviados += 1
+def ja_enviou_sinal(fixture_id):
+    cursor.execute(
+        "SELECT fixture_id FROM sinais_enviados WHERE fixture_id = ?",
+        (fixture_id,)
+    )
+    return cursor.fetchone() is not None
 
-        if enviados == 0:
-            await update.message.reply_text("Encontrei jogos ao vivo, mas nenhum bateu a regra agora.")
-
-    except Exception as e:
-        await update.message.reply_text(f"Erro ao consultar jogos: {e}")
-
-async def verificar_automatico(context):
-    global alertas_enviados
+def salvar_sinal(fixture_id, tipo):
+    data = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
     try:
-        jogos = jogos_ao_vivo()
+        cursor.execute(
+            "INSERT INTO sinais_enviados (fixture_id, tipo, data) VALUES (?, ?, ?)",
+            (fixture_id, tipo, data)
+        )
+        conn.commit()
+    except:
+        pass
 
-        if not jogos:
-            return
+# ================= EXTRAÇÃO DOS DADOS =================
 
-        for fixture in jogos[:10]:
-            fixture_id = fixture["fixture"]["id"]
+def extrair_dados_jogo(jogo):
+    fixture_id = jogo["fixture"]["id"]
+    minuto = jogo["fixture"]["status"].get("elapsed", 0)
 
-            if fixture_id in alertas_enviados:
+    time_casa = jogo["teams"]["home"]["name"]
+    time_fora = jogo["teams"]["away"]["name"]
+
+    gols_casa = jogo["goals"]["home"] or 0
+    gols_fora = jogo["goals"]["away"] or 0
+
+    estatisticas = jogo.get("statistics", [])
+
+    dados_casa = {}
+    dados_fora = {}
+
+    if len(estatisticas) >= 2:
+        for item in estatisticas[0].get("statistics", []):
+            dados_casa[item["type"]] = item["value"]
+
+        for item in estatisticas[1].get("statistics", []):
+            dados_fora[item["type"]] = item["value"]
+
+    def numero(valor):
+        if valor is None:
+            return 0
+        if isinstance(valor, str):
+            valor = valor.replace("%", "")
+        try:
+            return int(valor)
+        except:
+            return 0
+
+    ataques_perigosos_casa = numero(dados_casa.get("Dangerous Attacks"))
+    ataques_perigosos_fora = numero(dados_fora.get("Dangerous Attacks"))
+
+    finalizacoes_casa = numero(dados_casa.get("Total Shots"))
+    finalizacoes_fora = numero(dados_fora.get("Total Shots"))
+
+    chutes_gol_casa = numero(dados_casa.get("Shots on Goal"))
+    chutes_gol_fora = numero(dados_fora.get("Shots on Goal"))
+
+    escanteios_casa = numero(dados_casa.get("Corner Kicks"))
+    escanteios_fora = numero(dados_fora.get("Corner Kicks"))
+
+    posse_casa = numero(dados_casa.get("Ball Possession"))
+    posse_fora = numero(dados_fora.get("Ball Possession"))
+
+    if posse_casa >= posse_fora:
+        time_dominante = time_casa
+        pressao = posse_casa
+        ataques_perigosos = ataques_perigosos_casa
+        finalizacoes = finalizacoes_casa
+        chutes_gol = chutes_gol_casa
+        escanteios = escanteios_casa
+    else:
+        time_dominante = time_fora
+        pressao = posse_fora
+        ataques_perigosos = ataques_perigosos_fora
+        finalizacoes = finalizacoes_fora
+        chutes_gol = chutes_gol_fora
+        escanteios = escanteios_fora
+
+    return {
+        "fixture_id": fixture_id,
+        "minuto": minuto,
+        "time_casa": time_casa,
+        "time_fora": time_fora,
+        "gols_casa": gols_casa,
+        "gols_fora": gols_fora,
+        "time_dominante": time_dominante,
+        "pressao": pressao,
+        "ataques_perigosos": ataques_perigosos,
+        "finalizacoes": finalizacoes,
+        "chutes_gol": chutes_gol,
+        "escanteios": escanteios
+    }
+
+# ================= MONITORAMENTO =================
+
+async def monitorar_jogos(context: ContextTypes.DEFAULT_TYPE):
+    jogos = buscar_jogos_ao_vivo()
+
+    if not jogos:
+        logging.info("Nenhum jogo ao vivo encontrado.")
+        return
+
+    for jogo in jogos:
+        try:
+            dados = extrair_dados_jogo(jogo)
+
+            fixture_id = dados["fixture_id"]
+            minuto = dados["minuto"]
+
+            if ja_enviou_sinal(fixture_id):
                 continue
 
-            stats = estatisticas_fixture(fixture_id)
-            sinal = classificar_mercado(fixture, stats)
+            sinal = detector_gol_ht(dados)
 
             if sinal:
-                jogo = f'{fixture["teams"]["home"]["name"]} x {fixture["teams"]["away"]["name"]}'
-                texto = (
-                    f"{sinal['emoji']} ALERTA {sinal['titulo']}\n"
-                    f"🏟 {jogo}\n"
-                    f"⏱ {sinal['minuto']}'\n"
-                    f"⚽ {sinal['placar']}\n"
-                    f"📊 Posse máx: {sinal['posse_max']}%\n"
-                    f"🎯 Chutes no gol: {sinal['shots_on']}\n"
-                    f"🥅 Chutes totais: {sinal['shots_total']}\n"
-                    f"🚩 Escanteios: {sinal['corners']}"
-                )
+                salvar_sinal(fixture_id, sinal["tipo"])
+
+                teclado = [
+                    [
+                        InlineKeyboardButton("✅ WIN", callback_data="WIN"),
+                        InlineKeyboardButton("❌ LOSS", callback_data="LOSS"),
+                        InlineKeyboardButton("🔁 REEMBOLSO", callback_data="REEMBOLSO")
+                    ]
+                ]
+
+                reply_markup = InlineKeyboardMarkup(teclado)
+
+                mensagem = f"""
+🚨 ALERTA DE GOL HT
+
+{sinal['tipo']}
+📊 Score: {sinal['score']}/100
+
+🏆 Jogo:
+{dados['time_casa']} x {dados['time_fora']}
+
+⏱ Minuto: {minuto}'
+⚽ Placar: {dados['gols_casa']} x {dados['gols_fora']}
+
+🔥 Time com melhor momento:
+{dados['time_dominante']}
+
+📈 Dados do padrão:
+Pressão/posse: {dados['pressao']}%
+Ataques perigosos: {dados['ataques_perigosos']}
+Finalizações: {dados['finalizacoes']}
+Chutes no gol: {dados['chutes_gol']}
+Escanteios: {dados['escanteios']}
+
+🧠 Motivos:
+{', '.join(sinal['motivos'])}
+"""
 
                 await context.bot.send_message(
                     chat_id=CHAT_ID,
-                    text=texto,
-                    reply_markup=botoes_resultado(sinal["mercado"])
+                    text=mensagem,
+                    reply_markup=reply_markup
                 )
 
-                alertas_enviados.add(fixture_id)
+        except Exception as erro:
+            logging.error(f"Erro ao analisar jogo: {erro}")
 
-    except Exception as e:
-        print("Erro na verificação automática:", e)
+# ================= MAIN =================
 
-iniciar_banco()
+def main():
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("alerta", alerta))
-app.add_handler(CommandHandler("resultado", resultado))
-app.add_handler(CommandHandler("aovivo", aovivo))
-app.add_handler(CallbackQueryHandler(clicar))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("resultado", resultado))
+    app.add_handler(CallbackQueryHandler(botoes_resultado))
 
-app.job_queue.run_repeating(verificar_automatico, interval=120, first=10)
+    app.job_queue.run_repeating(
+        monitorar_jogos,
+        interval=INTERVALO_BUSCA,
+        first=10
+    )
 
-print("Bot rodando...")
-app.run_polling()
+    print("✅ Bot rodando com Detector Inteligente de Gol HT...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
